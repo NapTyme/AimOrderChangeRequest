@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AIM Change Request</title>
+  <style>
+    body { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #f5f6fa; }
+    h1 { margin-bottom: 12px; font-size: 1.6rem; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    label { font-size: 0.9rem; display: block; margin-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; table-layout: fixed; }
+    th, td { border: 1px solid #e1e1e1; padding: 6px; font-size: 0.9rem; vertical-align: top; }
+    th { background: #f0f0f0; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .controls { display: flex; gap: 10px; margin: 10px 0; }
+    .btn { padding: 6px 12px; border: none; background: #0078d4; color: #fff; cursor: pointer; border-radius: 6px; font-size: 0.85rem; }
+    .btn:hover { background: #005ea2; }
+    .btn-secondary { background: #6c757d; }
+    .btn-secondary:hover { background: #545b62; }
+    .error { color: #b00020; margin-bottom: 8px; }
+
+    /* header grid: fixed widths */
+    .header-grid {
+      display: grid;
+      grid-template-columns: 260px 180px 200px 160px;
+      gap: 16px;
+      align-items: end;
+    }
+    .header-field input,
+    .header-field select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      height: 32px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .current-date-wrap label { text-align: right; }
+    .current-date-wrap input { text-align: right; }
+
+    /* table column widths */
+    td.wrin { width: 80px; }
+    td.desc { width: 200px; }
+    td.red { width: 110px; }
+    td.soh { width: 100px; }
+    td.reason { width: 140px; }
+    td.comment { } /* expands */
+    td.remove { width: 50px; text-align: center; }
+    td input, td select { width: 100%; box-sizing: border-box; }
+
+    /* autocomplete dropdown */
+    .suggest { position: absolute; z-index: 10; background: #fff; border: 1px solid #ddd; border-radius: 6px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.08); max-height: 240px; overflow-y: auto; display: none; }
+    .suggest ul { list-style: none; margin: 0; padding: 4px; }
+    .suggest li { padding: 6px 8px; cursor: pointer; font-size: 0.85rem; border-radius: 4px; }
+    .suggest li:hover { background: #f5f7fb; }
+
+    /* footer credit */
+    .footer { margin-top: 24px; color: #666; font-size: 0.85rem; text-align: center; }
+    .footer small { display: inline-block; padding: 8px 12px; background: #fff; border: 1px solid #e1e1e1; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>AIM Change Request</h1>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="error">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form method="post" action="{{ url_for('generate') }}" autocomplete="off">
+    <!-- Header row -->
+    <div class="card">
+      <div class="header-grid">
+        <div class="header-field">
+          <label for="restaurant">Store</label>
+          <select id="restaurant" name="restaurant" required>
+            <option value="">Select Store</option>
+            {% for opt in restaurant_options %}
+              <option>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="header-field">
+          <label for="delivery_date">Delivery Date <span id="delivery_hint" style="color:#666; font-size:0.8rem;"></span></label>
+          <input type="date" id="delivery_date" name="delivery_date" required />
+        </div>
+        <div class="header-field">
+          <label for="manager_name">Manager Name</label>
+          <input type="text" id="manager_name" name="manager_name" placeholder="Full name" required />
+        </div>
+        <div class="header-field current-date-wrap">
+          <label>Current Date</label>
+          <input type="text" id="current_date_display" disabled />
+        </div>
+      </div>
+    </div>
+
+    <!-- Table controls -->
+    <div class="controls">
+      <button class="btn" type="button" onclick="addRow()">+ Add Row</button>
+      <button class="btn btn-secondary" type="button" onclick="addRows(5)">+ Add 5 Rows</button>
+      <button class="btn btn-secondary" type="button" onclick="clearRows()">Clear All</button>
+    </div>
+
+    <!-- Table -->
+    <div class="card">
+      <table id="itemsTable">
+        <thead>
+          <tr>
+            <th>WRIN</th>
+            <th>Description</th>
+            <th>Reduction Type</th>
+            <th>Stock on Hand</th>
+            <th>Reason for Change</th>
+            <th>Comment</th>
+            <th>Remove</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Submit -->
+    <div class="controls">
+      <button class="btn" type="submit">Download Updated Excel</button>
+    </div>
+  </form>
+
+  <div class="footer">
+    <small>Built by Harry Zwegers</small>
+  </div>
+
+  <script>
+    const REDUCTION_CHOICES = {{ reduction_choices|tojson|safe }};
+    const REASON_CHOICES = {{ reason_choices|tojson|safe }};
+
+    // --- date formatting (dd/mm/yyyy) for display ---
+    function formatDMY(d) {
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`;
+    }
+    // Current Date display
+    document.getElementById('current_date_display').value = formatDMY(new Date());
+
+    // Delivery Date hint (shows dd/mm/yyyy under the label as user picks)
+    const deliveryInput = document.getElementById('delivery_date');
+    const deliveryHint = document.getElementById('delivery_hint');
+    function updateDeliveryHint() {
+      if (!deliveryInput.value) { deliveryHint.textContent = ''; return; }
+      const [y, m, d] = deliveryInput.value.split('-');
+      deliveryHint.textContent = `(${d}/${m}/${y})`;
+    }
+    deliveryInput.addEventListener('change', updateDeliveryHint);
+    updateDeliveryHint();
+
+    // --- lookup/autocomplete ---
+    async function fetchLookup(q, mode) {
+      if (!q) return [];
+      const res = await fetch(`/lookup?q=${encodeURIComponent(q)}&mode=${mode}`);
+      if (!res.ok) return [];
+      return res.json();
+    }
+
+    function makeSelect(options, name) {
+      const sel = document.createElement('select');
+      sel.name = name;
+      options.forEach(v => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        sel.appendChild(o);
+      });
+      return sel;
+    }
+
+    function attachAutocomplete(input, otherInput, mode) {
+      const suggest = document.createElement('div');
+      suggest.className = 'suggest';
+      suggest.innerHTML = '<ul></ul>';
+      document.body.appendChild(suggest);
+
+      async function showSuggestions() {
+        const q = input.value.trim();
+        if (!q) { suggest.style.display = 'none'; return; }
+        const data = await fetchLookup(q, mode);
+        const ul = suggest.querySelector('ul');
+        ul.innerHTML = '';
+        data.forEach(r => {
+          const li = document.createElement('li');
+          li.textContent = mode === 'wrin' ? `${r.wrin} — ${r.name}` : `${r.name} — ${r.wrin}`;
+          li.onclick = () => {
+            if (mode === 'wrin') {
+              input.value = r.wrin;
+              otherInput.value = r.name;
+            } else {
+              input.value = r.name;
+              otherInput.value = r.wrin;
+            }
+            suggest.style.display = 'none';
+          };
+          ul.appendChild(li);
+        });
+        if (data.length > 0) {
+          const rect = input.getBoundingClientRect();
+          suggest.style.left = rect.left + window.scrollX + 'px';
+          suggest.style.top = rect.bottom + window.scrollY + 'px';
+          suggest.style.minWidth = rect.width + 'px';
+          suggest.style.display = 'block';
+        } else {
+          suggest.style.display = 'none';
+        }
+      }
+
+      input.addEventListener('input', showSuggestions);
+      input.addEventListener('blur', () => setTimeout(() => suggest.style.display = 'none', 150));
+
+      // disable browser's own history suggestions for these fields only
+      input.autocomplete = 'off';
+      input.autocapitalize = 'off';
+      input.setAttribute('autocorrect', 'off');
+      input.spellcheck = false;
+    }
+
+    function addRow() {
+      const tbody = document.querySelector('#itemsTable tbody');
+      const tr = document.createElement('tr');
+
+      const tdWRIN = document.createElement('td'); tdWRIN.className = 'wrin';
+      const inputWRIN = document.createElement('input'); inputWRIN.name = 'wrin[]'; inputWRIN.required = true;
+      tdWRIN.appendChild(inputWRIN);
+
+      const tdDesc = document.createElement('td'); tdDesc.className = 'desc';
+      const inputDesc = document.createElement('input'); inputDesc.name = 'description[]'; inputDesc.required = true;
+      tdDesc.appendChild(inputDesc);
+
+      const tdRed = document.createElement('td'); tdRed.className = 'red';
+      tdRed.appendChild(makeSelect({{ reduction_choices|tojson|safe }}, 'reduction_type[]'));
+
+      const tdSOH = document.createElement('td'); tdSOH.className = 'soh';
+      const inputSOH = document.createElement('input'); inputSOH.type = 'number'; inputSOH.name = 'stock_on_hand[]'; inputSOH.min = '0'; inputSOH.step = 'any'; inputSOH.required = true;
+      tdSOH.appendChild(inputSOH);
+
+      const tdReason = document.createElement('td'); tdReason.className = 'reason';
+      tdReason.appendChild(makeSelect({{ reason_choices|tojson|safe }}, 'reason[]'));
+
+      const tdComment = document.createElement('td'); tdComment.className = 'comment';
+      const inputComment = document.createElement('input'); inputComment.name = 'comment[]';
+      tdComment.appendChild(inputComment);
+
+      const tdRemove = document.createElement('td'); tdRemove.className = 'remove';
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'btn btn-secondary'; btn.textContent = 'X';
+      btn.onclick = () => tr.remove();
+      tdRemove.appendChild(btn);
+
+      tr.appendChild(tdWRIN);
+      tr.appendChild(tdDesc);
+      tr.appendChild(tdRed);
+      tr.appendChild(tdSOH);
+      tr.appendChild(tdReason);
+      tr.appendChild(tdComment);
+      tr.appendChild(tdRemove);
+
+      tbody.appendChild(tr);
+
+      attachAutocomplete(inputWRIN, inputDesc, 'wrin');
+      attachAutocomplete(inputDesc, inputWRIN, 'name');
+    }
+
+    function addRows(n) { for (let i=0;i<n;i++) addRow(); }
+    function clearRows() { document.querySelector('#itemsTable tbody').innerHTML = ''; }
+
+    addRows(3);
+  </script>
+</body>
+</html>
